@@ -1,0 +1,190 @@
+---
+title: "MATH-517: Assignment 3"
+author: "Elies Latrech"
+date: '10/01/2025'
+format: pdf
+editor: visual
+header-includes:
+  - \usepackage{amsmath,amssymb}
+---
+
+## Theoretical exercise
+
+We know that the local linear regression estimator at point $x$ is $$\hat{m}(x) = \hat{\beta}_0(x) = \arg \min_{\beta_0,\beta_1} (Y-X\beta)^\top W (Y-X\beta) = [ (X^\top W X)^{-1}X^\top W Y ]_1, $$ where $$ X = \begin{bmatrix}
+1 & X_1-x \\
+\vdots & \vdots \\
+1 & X_n-x
+\end{bmatrix}, \quad
+W= \text{diag}(K(\frac{X_1-x}{h}), \dots, K(\frac{X_n-x}{h})), \quad \text{and }
+Y=\begin{bmatrix}
+Y_1 \\ \vdots \\ Y_n
+\end{bmatrix}. $$
+
+We therefore compute: $$ X^\top W Y = \begin{bmatrix}
+\sum_{i=1}^n K(\frac{X_i-x}{h}) Y_i \\ \sum_{i=1}^n K(\frac{X_i-x}{h}) (X_i-x)Y_i
+\end{bmatrix} ,\quad \text{and }
+X^\top W X = nh \cdot \begin{bmatrix}
+S_{n,0}(x) & S_{n,1}(x) \\
+S_{n,1}(x) & S_{n,2}(x)
+\end{bmatrix}. $$
+
+The inverse of this second matrix is $$ (X^\top W X)^{-1} = \frac{1}{nh(S_{n,0}(x)S_{n,2}(x)-S_{n,1}(x)^2)} \begin{bmatrix}
+S_{n,2}(x) & -S_{n,1}(x) \\
+-S_{n,1}(x) & S_{n,0}(x)
+\end{bmatrix},$$ which lets us finally consider \begin{align*}
+nh(S_{n,0}(x)S_{n,2}(x)-S_{n,1}(x)^2) \hat{\beta}_0(x) &= S_{n,2}(x) \sum_{i=1}^n K(\frac{X_i-x}{h})Y_i - S_{n,1}\sum_{i=1}^n K(\frac{X_i-x}{h})(X_i-x)Y_i \\
+&= \sum_{i=1}^n K(\frac{X_i-x}{h}) (S_{n,2}(x)-(X_i-x)S_{n,1}(x)) Y_i,
+\end{align*} which concludes. That is, the local linear regression estimator is a linear smoother, with weights $$ w_{ni}(x) = \frac{K(\frac{X_i-x}{h}) (S_{n,2}(x)-(X_i-x)S_{n,1}(x))}{nh(S_{n,0}(x)S_{n,2}(x)-S_{n,1}(x)^2)}. $$
+
+We finally check that the sum of these weights is indeed $1$: \begin{align*}
+\sum_{i=1}^n w_{ni}(x) &= \frac{1}{nh(S_{n,0}(x)S_{n,2}(x)-S_{n,1}(x)^2)} \left( S_{n,2}(x) \sum_{i=1}^n K(\frac{X_i-x}{h})-S_{n,1}(x) \sum_{i=1}^n K(\frac{X_i-x}{h}) (X_i-x)  \right) \\
+&= 1.
+\end{align*}
+
+## Practical exercise
+
+After some initial tests using the "shiny app" present in the same repository as this report, we summarize some of the behavior the estimate of the optimal global bandwidth $h_{AMISE}$ shows when varying the sample size $n$, the number of blocs $N$, and the skewness (by changing $\alpha$ for fixed $\beta$ for example) of the sample's generating beta distribution.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+
+library(ggplot2)
+estimate_hamise <- function(X, Y, N) {
+  n <- length(X)
+  breaks <- seq(0, 1, length.out = N+1)
+  blk <- cut(X, breaks = breaks, include.lowest = TRUE, labels = FALSE)
+  RSS <- 0
+  second_sq <- rep(NA_real_, n)
+  for (j in 1:N) {
+    sel <- which(blk == j)
+    if (length(sel) >= 5) {
+      dfj <- data.frame(x = X[sel], y = Y[sel])
+      fit <- lm(y ~ x + I(x^2) + I(x^3) + I(x^4), data = dfj)
+      b <- coef(fit)
+      b[is.na(b)] <- 0
+            fitted <- predict(fit, newdata = dfj)
+      RSS <- RSS + sum((dfj$y - fitted)^2)
+      m2 <- 2*b["I(x^2)"] + 6*b["I(x^3)"]*dfj$x + 12*b["I(x^4)"]*dfj$x^2# second derivative of quartic
+      second_sq[sel] <- m2^2
+    }
+  }
+  
+  sigma2_hat <- RSS / (n - 5*N)
+  theta22_hat <- sum(second_sq, na.rm = TRUE) / n
+  
+  h_hat <- n^(-1/5) * ((35 * sigma2_hat * 1) / theta22_hat)^(1/5)
+  list(h = h_hat, sigma2 = sigma2_hat, theta22 = theta22_hat, RSS = RSS)
+}
+
+choose_optimal_N <- function(X, Y) {
+  n <- length(X)
+  Nmax <- max(min(floor(n/20), 5), 1)
+  resN <- lapply(1:Nmax, function(N) c(estimate_hamise(X,Y,N), N=N))
+  RSSmax <- resN[[Nmax]]$RSS
+  Cp <- sapply(1:Nmax, function(N) {
+    RSS <- resN[[N]]$RSS
+    RSS / (RSSmax/(n - 5*Nmax)) - (n - 10*N)
+  })
+  Nopt <- which.min(Cp)
+  list(Nopt=Nopt, Cp=Cp, Nmax=Nmax, resN=resN)
+}
+
+
+```
+
+In the following plot, we see that the global optimal bandwidth decrease as the sample size increases, consistent with $n^{-\frac{1}{5}}$, which justifies that when given larger samples, we can choose a smaller bandwidth.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+plot_h_vs_n <- function(seed=1, ns=seq(50,1000,by=50), alpha=2, beta=2) {
+  set.seed(seed)
+  df <- data.frame(n=ns, h=NA_real_, Nopt=NA_integer_)
+  for (i in seq_along(ns)) {
+    n <- ns[i]
+    X <- rbeta(n, alpha, beta)
+    Y <- sin(1/(X/3+0.1)) + rnorm(n, sd=0.5)
+    Ninfo <- choose_optimal_N(X,Y)
+    df$h[i] <- Ninfo$resN[[Ninfo$Nopt]]$h
+    df$Nopt[i] <- Ninfo$Nopt
+  }
+  ggplot(df, aes(x=n,y=h)) + geom_line() + geom_point(aes(color=factor(Nopt))) +
+    labs(title="h_AMISE vs n (N chosen optimally)",
+         x="Sample size n", y=expression(h[AMISE]), color="N opt") +
+    theme_minimal()
+}
+print(plot_h_vs_n())
+
+```
+
+In the following plot, we see that for big block number $N$, all else fixed, the estimate gets smaller and smaller. We could explain this by looking at how a large $\theta_{22}$ shrinks $h_{AMISE}$ ; and it does get bigger when the second derivative of the quartic estimate, which represents its curvature, gets bigger, which does happen as when the block number is too large, the number of samples per block gets too small for a reliable fit. This justifies why we should find a smart way of choosing $N$ dependent on $n$.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+plot_h_vs_N <- function(seed=1, n=200, alpha=2, beta=2) {
+  set.seed(seed)
+  X <- rbeta(n, alpha, beta)
+  Y <- sin(1/(X/3+0.1)) + rnorm(n, sd=0.5)
+  Nmax <- 10
+  df <- data.frame(N=1:Nmax, h=NA_real_)
+  for (N in 1:Nmax) {
+    df$h[N] <- estimate_hamise(X,Y,N)$h
+  }
+  ggplot(df, aes(x=N,y=h)) + geom_line() + geom_point() +
+    labs(title="h_AMISE vs N (fixed n)",
+         x="Block number N", y=expression(h[AMISE])) +
+    theme_minimal()
+}
+print(plot_h_vs_N())
+
+```
+
+Finally, when the beta distribution's alpha parameter increase, the sample becomes skewed, and so some blocks become dense or sparse. We then have an effect of our regression thinking the fit is smoother than it actually is, decreasing the curvature metric $\theta_{22}$, as sparser blocks get little weight in the average. Note that the effect is opposite of when $N$ gets larger, as here not all blocks become sparse, which before caused large $\theta_{22}$, but some become very dense and so have a stable fitted curve.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+plot_h_vs_alpha <- function(seed=1, n=200, betafix=2, alphas=seq(0.25,5,by=0.25)) {
+  set.seed(seed)
+  df <- data.frame(alpha=alphas, h=NA_real_)
+  for (i in seq_along(alphas)) {
+    X <- rbeta(n, alphas[i], betafix)
+    Y <- sin(1/(X/3+0.1)) + rnorm(n, sd=0.5)
+    Ninfo <- choose_optimal_N(X,Y)
+    df$h[i] <- Ninfo$resN[[Ninfo$Nopt]]$h
+  }
+  ggplot(df, aes(x=alpha,y=h)) + geom_line() + geom_point() +
+    labs(title=bquote("h_AMISE vs"~alpha~"(beta fixed at"~.(betafix)~")"),
+         x=expression(alpha), y=expression(h[AMISE])) +
+    theme_minimal()
+}
+print(plot_h_vs_alpha())
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+
+
+```
